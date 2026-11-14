@@ -1,59 +1,62 @@
-From 6578ea45335eb088bfc5ea8bebe696348883dc44 Mon Sep 17 00:00:00 2001
-From: mahir-m01 <mahirabd.official@gmail.com>
-Date: Sat, 14 Nov 2026 12:26:44 +0000
+From bba462a1ad5042e684d12dad5aa26188603e030c Mon Sep 17 00:00:00 2001
+From: Alex Rau <alex@retroduction.org>
+Date: Tue, 3 Nov 2026 23:04:34 +0100
 Subject: [PATCH] qualcommbe: edma: wake the Tx queue of the completed ring
 
-The EDMA driver stops Tx queue N when Tx ring N runs out of descriptors,
-but wakes the queue numbered after the CPU that handles the completion.
-All Tx completion IRQs run on CPU0 by default, so only queue 0 is ever
-woken. Once ring 1, 2 or 3 fills, for example when Wi-Fi clients send
-faster than a 100 Mbit/s uplink, that queue stays stopped and the flows
-hashed to it stall until reboot, with nothing logged.
+The EDMA Tx completion wakes the Tx queue numbered after the CPU that
+runs the completion, while the xmit path stops the queue of the skb's
+queue mapping (the sending CPU, see edma_port_select_queue()). All Tx
+completion interrupts are serviced on CPU 0, so only queue 0 is ever
+woken: a queue of CPU 1-3 that was stopped once because its ring was
+full stays stopped, and every packet the kernel maps to it is lost.
 
-Wake the queue that belongs to the completion ring.
+Seen on a UniFi Cloud Gateway Fiber (IPQ9574) with packet steering
+spread over all cores and a download to a 2.5G LAN client: after the
+first full ring the router's own TCP died (SSH timed out after the
+handshake) while ping and DNS still worked; tc showed the qdisc children
+of queues 1-3 with a constant backlog and one requeue each.
 
-Reproduced on the JIDU6411 by sending 400 Mbit/s of UDP over its
-100 Mbit/s uplink: queues 1-3 kept about 2000 packets of backlog
-indefinitely and 6 of 8 new TCP connections failed. Pinning each
-completion IRQ to its own CPU (the condition the old code relies on)
-cleared it on both units under the same load.
+Port n uses the Tx rings (n - 1) * num_possible_cpus() + q for its queue
+q, with a 1:1 Tx completion ring map, so wake the queue at the
+completion ring's index modulo the CPU count.
 
-Signed-off-by: mahir-m01 <mahirabd.official@gmail.com>
+Signed-off-by: Alex Rau <alex@retroduction.org>
+Assisted-by: Claude:claude-opus-5-5
 ---
  ...e-the-Tx-queue-of-the-completed-ring.patch | 57 +++++++++++++++++++
  1 file changed, 57 insertions(+)
- create mode 100644 target/linux/qualcommbe/patches-6.18/0450-net-ethernet-qualcomm-edma-wake-the-Tx-queue-of-the-completed-ring.patch
+ create mode 100644 target/linux/qualcommbe/patches-6.18/0370-net-ethernet-qualcomm-edma-wake-the-Tx-queue-of-the-completed-ring.patch
 
-diff --git a/target/linux/qualcommbe/patches-6.18/0450-net-ethernet-qualcomm-edma-wake-the-Tx-queue-of-the-completed-ring.patch b/target/linux/qualcommbe/patches-6.18/0450-net-ethernet-qualcomm-edma-wake-the-Tx-queue-of-the-completed-ring.patch
+diff --git a/target/linux/qualcommbe/patches-6.18/0370-net-ethernet-qualcomm-edma-wake-the-Tx-queue-of-the-completed-ring.patch b/target/linux/qualcommbe/patches-6.18/0370-net-ethernet-qualcomm-edma-wake-the-Tx-queue-of-the-completed-ring.patch
 new file mode 100644
-index 0000000000..188874795e
+index 0000000000..f259696295
 --- /dev/null
-+++ b/target/linux/qualcommbe/patches-6.18/0450-net-ethernet-qualcomm-edma-wake-the-Tx-queue-of-the-completed-ring.patch
++++ b/target/linux/qualcommbe/patches-6.18/0370-net-ethernet-qualcomm-edma-wake-the-Tx-queue-of-the-completed-ring.patch
 @@ -0,0 +1,57 @@
-+From: mahir-m01 <mahirabd.official@gmail.com>
-+Subject: [PATCH] net: ethernet: qualcomm: edma: wake the Tx queue of the completed ring
++From 607aa5f409c88d842af53193c7388ed3550acdd0 Mon Sep 17 00:00:00 2001
++From: Alex Rau <alex@retroduction.org>
++Date: Tue, 3 Nov 2026 22:40:00 +0100
++Subject: [PATCH] net: ethernet: qualcomm: edma: wake the Tx queue of the
++ completed ring
 +
-+edma_port_xmit() fills Tx ring N from Tx queue N and stops that queue
-+when the ring has no free descriptors. edma_tx_complete() then wakes the
-+queue numbered after the CPU it runs on. The two only match when every
-+Tx completion IRQ is pinned to its own CPU. With the default affinity
-+all completion IRQs are handled on CPU0, so only queue 0 is ever woken;
-+once ring 1, 2 or 3 fills (any burst above the line rate, e.g. Wi-Fi
-+clients behind a 100 Mbit/s uplink) that queue stays stopped and the
-+flows hashed to it stall until reboot, without any log message.
++edma_tx_complete() wakes the Tx queue numbered after the CPU that runs
++the completion, while the xmit path stops the queue of the skb queue
++mapping. With all Tx completion interrupts on one CPU, only that CPU's
++queue is ever woken; a queue of another CPU stays stopped forever once
++its ring was full, and all traffic mapped to it is lost.
 +
-+Wake the queue that belongs to the completion ring instead.
++Port n uses the rings (n - 1) * num_possible_cpus() + q for its queue q,
++so wake the queue at the completion ring's index modulo the CPU count.
 +
-+Reproduced on IPQ9574 (JioRouter AX6000) by sending 400 Mbit/s of UDP
-+over a 100 Mbit/s link: before, queues 1-3 kept ~2000 packets of backlog
-+forever and 6 of 8 new TCP connections failed; after, all queues drain
-+and every connection succeeds.
-+
-+Signed-off-by: mahir-m01 <mahirabd.official@gmail.com>
++Signed-off-by: Alex Rau <alex@retroduction.org>
++Assisted-by: Claude:claude-opus-5-5
 +---
-+--- a/drivers/net/ethernet/qualcomm/ppe/edma_tx.c	2026-11-14 12:25:40.327478921 +0000
-++++ b/drivers/net/ethernet/qualcomm/ppe/edma_tx.c	2026-11-14 12:25:40.342729346 +0000
-+@@ -100,7 +100,7 @@
++ drivers/net/ethernet/qualcomm/ppe/edma_tx.c | 14 +++++++++++---
++ 1 file changed, 11 insertions(+), 3 deletions(-)
++
++--- a/drivers/net/ethernet/qualcomm/ppe/edma_tx.c
+++++ b/drivers/net/ethernet/qualcomm/ppe/edma_tx.c
++@@ -100,7 +100,7 @@ u32 edma_tx_complete(u32 work_to_do, str
 + 	struct edma_txcmpl_stats *txcmpl_stats = &txcmpl_ring->txcmpl_stats;
 + 	struct ppe_device *ppe_dev = edma_ctx->ppe_dev;
 + 	struct regmap *regmap = ppe_dev->regmap;
@@ -62,16 +65,16 @@ index 0000000000..188874795e
 + 	struct device *dev = ppe_dev->dev;
 + 	u32 avail, count, txcmpl_errors;
 + 	struct edma_txcmpl_desc *txcmpl;
-+@@ -212,14 +212,22 @@
++@@ -212,14 +212,22 @@ u32 edma_tx_complete(u32 work_to_do, str
 + 	/* If tx_requeue_stop disabled (tx_requeue_stop = 0)
 + 	 * Fetch the tx queue of interface and check if it is stopped.
 + 	 * if queue is stopped and interface is up, wake up this queue.
 ++	 *
-++	 * Completion ring N serves Tx ring N, which edma_port_xmit() fills
-++	 * from Tx queue N % num_possible_cpus(). Wake that queue rather than
-++	 * the one numbered after the CPU running this poll: the two only match
-++	 * when every completion IRQ is pinned to its own CPU, and otherwise a
-++	 * queue stopped on a full ring is never woken and stalls for good.
+++	 * Wake the queue that this completion ring serves, not the queue of
+++	 * the CPU running the completion: the completion interrupts may all
+++	 * run on one CPU, and the queues of the other CPUs would then stay
+++	 * stopped. Port n uses the rings (n - 1) * num_possible_cpus() + q
+++	 * for its queue q (edma_cfg_tx_fill_per_port_tx_map()).
 + 	 */
 + 	if (unlikely(!edma_ctx->tx_requeue_stop)) {
 + 		cpu_id = smp_processor_id();

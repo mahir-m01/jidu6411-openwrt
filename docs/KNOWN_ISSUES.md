@@ -56,7 +56,11 @@ that handled the completion, not queue N. Every Tx completion interrupt runs
 on CPU0 by default, so only queue 0 is ever restarted.
 
 **Fix.** Patch `0004` wakes the queue that belongs to the completed ring. It
-is included from the release after v2026.11.11.
+is the change proposed upstream in
+[openwrt/openwrt#26461](https://github.com/openwrt/openwrt/pull/26461) by
+Alex Rau, and is included from the release after v2026.11.11. With it, the
+reproduction above leaves no queue stalled on either unit, also with every
+Tx completion interrupt on CPU0.
 
 **Workaround for v2026.11.11.** Pin each Tx completion interrupt to its own
 CPU so the two numbers match. Save this as `/etc/edma-txcmpl-affinity.sh`,

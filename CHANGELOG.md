@@ -10,7 +10,8 @@ Releases are named after their build date.
 
 - Wired traffic stalling until reboot: the EDMA Ethernet driver woke the Tx
   queue numbered after the current CPU instead of the queue of the completed
-  ring, so queues 1-3 never restarted after filling (patch `0004`).
+  ring, so queues 1-3 never restarted after filling (patch `0004`, from
+  openwrt/openwrt#26461).
 
 ## [v2026.11.11] - 2026-11-11
 
